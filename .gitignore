@@ -1,0 +1,19 @@
+# === SECRETS — NEVER COMMIT ===
+default.env
+.env
+*.enc
+*.wallet.enc
+*.soul.json
+*.db
+manus-*.db
+
+# === Runtime data ===
+strike_history.json
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# === IDE ===
+.vscode/
+.idea/
