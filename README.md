@@ -2,7 +2,8 @@
 
 Automated trading of 15-minute Bitcoin **Up/Down** markets on [Polymarket](https://polymarket.com), driven by [AIPP](https://aipricepatterns.com) live signals.
 
-> **Language:** this is the **primary** docs (English). Russian copy: [`README.ru.md`](README.ru.md).
+> **Language:** this is the **primary** ops guide (English). Russian ops copy: [`README.ru.md`](README.ru.md).  
+> **Why AIPP / product context:** [`doc/why-this-works.md`](doc/why-this-works.md) (EN) · [`doc/why-this-works.ru.md`](doc/why-this-works.ru.md) (RU) · [`doc/README.md`](doc/README.md).
 
 **Production mode:** `cycle_runner.py` runs every 15 minutes and:
 

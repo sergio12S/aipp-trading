@@ -2,7 +2,8 @@
 
 Автоторговля 15‑минутными Bitcoin **Up/Down** на [Polymarket](https://polymarket.com) по сигналам [AIPP](https://aipricepatterns.com).
 
-> **Язык:** это **русская копия**. Основная документация (English): [`README.md`](README.md).
+> **Язык:** это **русская копия** ops-гайда. Основное (English): [`README.md`](README.md).  
+> **Почему AIPP / смысл стека:** [`doc/why-this-works.ru.md`](doc/why-this-works.ru.md) · EN: [`doc/why-this-works.md`](doc/why-this-works.md) · индекс: [`doc/README.md`](doc/README.md).
 
 **Основной режим:** скрипт `cycle_runner.py` сам каждые 15 минут:
 
