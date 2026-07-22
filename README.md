@@ -1,49 +1,51 @@
 # Polymarket BTC 15m Pattern Trader
 
-Автоторговля 15‑минутными Bitcoin **Up/Down** на [Polymarket](https://polymarket.com) по сигналам [AIPP](https://aipricepatterns.com).
+Automated trading of 15-minute Bitcoin **Up/Down** markets on [Polymarket](https://polymarket.com), driven by [AIPP](https://aipricepatterns.com) live signals.
 
-**Основной режим:** скрипт `cycle_runner.py` сам каждые 15 минут:
+> **Language:** this is the **primary** docs (English). Russian copy: [`README.ru.md`](README.ru.md).
 
-1. Запрашивает AIPP live decision  
-2. Проверяет 3 hard gates (balanced v2)  
-3. Ставит **market buy ~$5** на **YES** (рост) или **NO** (падение), либо **SKIP**  
-4. Пишет цикл в **SQLite** (`trades.db`)
+**Production mode:** `cycle_runner.py` runs every 15 minutes and:
+
+1. Fetches the AIPP live trade decision  
+2. Applies 3 hard gates (balanced v2)  
+3. Places a **~$5 market buy** on **YES** (up) or **NO** (down), or **SKIP**  
+4. Logs the cycle to **SQLite** (`trades.db`)
 
 ---
 
-## Быстрый старт (шпаргалка)
+## Quick start
 
 ```bash
 cd /Users/serg/projects/my_trading/aipp-trading
 
-# 1) один раз: зависимости + ключи
+# 1) one-time: deps + keys
 pip install python-dotenv requests py-clob-client-v2
-cp default.env.example default.env   # если ещё нет
-# отредактируй default.env
+cp default.env.example default.env   # if missing
+# edit default.env
 
-# 2) проверка аккаунта
+# 2) account check
 python3 polymarket_executor.py --test
 
-# 3) запуск автоторговли (фон)
+# 3) start auto-trading (background)
 rm -f STOP_CYCLE_RUNNER
 nohup env RUN_IMMEDIATE=0 python3 cycle_runner.py >> cycle_runner.log 2>&1 &
 echo $! > cycle_runner.pid
 
-# 4) смотреть, что происходит
+# 4) watch activity
 tail -f cycle_runner.log
 python3 resolve_trades.py --stats-only
 
-# 5) после закрытия рынков — резолв PnL
+# 5) after markets settle — resolve PnL
 python3 resolve_trades.py
 
-# 6) остановка
+# 6) stop
 touch STOP_CYCLE_RUNNER
-# или: kill $(cat cycle_runner.pid)
+# or: kill $(cat cycle_runner.pid)
 ```
 
 ---
 
-## Как это работает
+## How it works
 
 ```
 :00 / :15 / :30 / :45  (+ ~25s buffer)
@@ -61,96 +63,97 @@ touch STOP_CYCLE_RUNNER
         Polymarket CLOB
 ```
 
-| Направление | Сторона | Смысл |
+| Direction | Side | Meaning |
 |---|---|---|
-| Рост | **BUY_YES** | BTC выше strike к close окна |
-| Падение | **BUY_NO** | BTC ниже strike |
+| Up | **BUY_YES** | BTC above strike at window close |
+| Down | **BUY_NO** | BTC below strike |
 
-Сторону выбирает **AIPP**, не «всегда long».
+Side is chosen by **AIPP**, not hard-coded to long-only.
 
 ### Hard gates (balanced v2)
 
-| Gate | Условие |
+| Gate | Condition |
 |---|---|
-| **G1** | AIPP = `BUY_YES` или `BUY_NO` (при `SKIP` не торгуем) |
+| **G1** | AIPP = `BUY_YES` or `BUY_NO` (`SKIP` → no trade) |
 | **G2** | `combined.conflict = false` |
-| **G3** | вероятность стороны > ask + **0.02** |
+| **G3** | side probability > ask + **0.02** |
 
-- Размер: **$5 USDC** market order (FOK-style)  
-- Trend / backtest proof — только soft (не hard-block)  
-- Подробный agent playbook: [`skill/SKILL.md`](skill/SKILL.md)
+- Size: **$5 USDC** market order (FOK-style)  
+- Local trend / pattern proof backtest are **soft only** (not hard blockers)  
+- Full agent playbook: [`skill/SKILL.md`](skill/SKILL.md)
 
-### Откуда данные
+### Data sources
 
-| Источник | Роль |
+| Source | Role |
 |---|---|
-| **AIPP** | сигнал, probs, edge, SKIP/BUY |
-| **Polymarket CLOB** | баланс, ордера, исполнение |
-| **Gamma API** | token id рынка, resolve outcome |
-| **trades.db** | наш ledger для статистики |
+| **AIPP** | signal, probs, edge, SKIP/BUY |
+| **Polymarket CLOB** | balance, orders, execution |
+| **Gamma API** | market token ids, outcome resolve |
+| **trades.db** | local ledger for evaluation |
 
 ---
 
-## Файлы проекта
+## Project files
 
-| Файл | Зачем |
+| File | Purpose |
 |---|---|
-| **`cycle_runner.py`** | Автоторговля 15m (главный процесс) |
-| **`trade_db.py`** | SQLite: запись циклов, resolve, stats |
-| **`resolve_trades.py`** | CLI: закрыть outcomes + показать статистику |
+| **`cycle_runner.py`** | 15m auto-trading (main process) |
+| **`trade_db.py`** | SQLite: record cycles, resolve, stats |
+| **`resolve_trades.py`** | CLI: resolve outcomes + print summary |
 | `polymarket_executor.py` | CLOB client, `python3 … --test` |
-| `polymarket_agent_bot.py` | Ручной один цикл (legacy / dry-run) |
-| `default.env` | Секреты Polymarket (**не в git**) |
-| `default.env.example` | Шаблон env |
-| **`trades.db`** | SQLite БД (локально, gitignore) |
-| `cycle_runner.log` | Текстовый лог runner |
-| `cycle_runner.pid` | PID фонового процесса |
-| `cycle_runner_state.json` | Последний цикл (JSON) |
-| `strike_history.json` | История strike/close (soft trend) |
-| `STOP_CYCLE_RUNNER` | Файл-флаг «остановиться» |
-| `skill/SKILL.md` | Framework для AI-агента |
+| `polymarket_agent_bot.py` | Manual single cycle (legacy / dry-run) |
+| `default.env` | Polymarket secrets (**not in git**) |
+| `default.env.example` | Env template |
+| **`trades.db`** | SQLite DB (local, gitignored) |
+| `cycle_runner.log` | Text log |
+| `cycle_runner.pid` | Background process PID |
+| `cycle_runner_state.json` | Last cycle snapshot (JSON) |
+| `strike_history.json` | Strike/close history (soft trend) |
+| `STOP_CYCLE_RUNNER` | Stop flag file |
+| `skill/SKILL.md` | AI agent decision framework |
+| `README.ru.md` | Russian documentation copy |
 
 ---
 
-## Установка (один раз)
+## Setup (once)
 
-### 1. Зависимости
+### 1. Dependencies
 
 ```bash
 cd /Users/serg/projects/my_trading/aipp-trading
 pip install python-dotenv requests py-clob-client-v2
 ```
 
-### 2. Ключи Polymarket
+### 2. Polymarket credentials
 
 ```bash
 cp default.env.example default.env
 ```
 
-В `default.env` нужны:
+Required in `default.env`:
 
 ```env
 POLYMARKET_API_KEY=...
 POLYMARKET_SECRET=...
 POLYMARKET_PASSPHRASE=...
-POLYMARKET_PK=...                 # private key signer
-POLYMARKET_FUNDER=0x...           # proxy wallet с USDC
-POLYMARKET_SIGNATURE_TYPE=2       # обычно 2
+POLYMARKET_PK=...                 # signer private key
+POLYMARKET_FUNDER=0x...           # proxy wallet holding USDC
+POLYMARKET_SIGNATURE_TYPE=2       # usually 2
 ```
 
-Опционально: `AIPP_TOKEN` — если AIPP REST требует Manus token.
+Optional: `AIPP_TOKEN` if AIPP REST requires a Manus token.
 
-USDC должен быть на **funder (proxy)**, не только на EOA signer.
+USDC must sit on the **funder (proxy)** wallet, not only the signer EOA.
 
-### 3. Проверка
+### 3. Sanity check
 
 ```bash
 python3 polymarket_executor.py --test
 ```
 
-Ожидаешь: `Status OK`, адрес signer, **USDC ≥ $5**, open orders.
+Expect: `Status OK`, signer address, **USDC ≥ $5**, open orders list.
 
-Инициализация пустой БД (создаётся сама при первом цикле, можно руками):
+Empty DB (auto-created on first cycle; optional manual init):
 
 ```bash
 python3 -c "from trade_db import init_db; init_db(); print('trades.db ok')"
@@ -159,9 +162,9 @@ python3 resolve_trades.py --stats-only
 
 ---
 
-## Запуск торговли
+## Start trading
 
-### Рекомендуемый режим (фон, ждать следующее окно)
+### Recommended (background, wait for next window)
 
 ```bash
 cd /Users/serg/projects/my_trading/aipp-trading
@@ -172,136 +175,136 @@ echo $! > cycle_runner.pid
 echo "PID=$(cat cycle_runner.pid)"
 ```
 
-`RUN_IMMEDIATE=0` — **не** торговать текущее окно сразу, ждать `:00/:15/:30/:45` + ~25s.
+`RUN_IMMEDIATE=0` — do **not** trade the current window immediately; wait for `:00/:15/:30/:45` + ~25s.
 
-### Сразу текущее окно (если TTC ≳ 3 мин)
+### Trade current window immediately (if TTC ≳ 3 min)
 
 ```bash
 nohup env RUN_IMMEDIATE=1 python3 cycle_runner.py >> cycle_runner.log 2>&1 &
 echo $! > cycle_runner.pid
 ```
 
-### Тест на N циклов (foreground)
+### Foreground test for N cycles
 
 ```bash
 MAX_CYCLES=3 RUN_IMMEDIATE=1 python3 cycle_runner.py
 ```
 
-### Переменные окружения runner
+### Runner environment variables
 
-| Переменная | Default | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `RUN_IMMEDIATE` | `0` | `1` = цикл сразу после старта |
-| `MAX_CYCLES` | `0` | `0` = бесконечно; иначе N циклов |
+| `RUN_IMMEDIATE` | `0` | `1` = run one cycle on startup |
+| `MAX_CYCLES` | `0` | `0` = unlimited; else stop after N cycles |
 
-В коде: `ALLOCATED_USD=5`, `EDGE_BUFFER=0.02`, `OPEN_BUFFER_SEC=25`.
+In code: `ALLOCATED_USD=5`, `EDGE_BUFFER=0.02`, `OPEN_BUFFER_SEC=25`.
 
-### Важно
+### Important
 
-- **Не запускай два runner’а** — риск double order.  
-  Проверка: `ps -p $(cat cycle_runner.pid)` / `pgrep -fl cycle_runner`  
-- Закрытие **крышки Mac** обычно = sleep → **пропуски окон**.  
-  `nohup` не спасает от сна. Для 24/7 — VPS / всегда on / `caffeinate`.  
-- Free USDC ≠ полный equity (shares / redeem).
+- **Do not run two runners** — double-order risk.  
+  Check: `ps -p $(cat cycle_runner.pid)` / `pgrep -fl cycle_runner`  
+- Closing a **MacBook lid** usually sleeps the machine → **missed windows**.  
+  `nohup` does not prevent sleep. For 24/7 use a VPS / always-on host / `caffeinate`.  
+- Free USDC ≠ full equity (open shares / redeem).
 
 ---
 
-## Остановка
+## Stop trading
 
 ```bash
-# мягко (после текущего sleep/цикла)
+# graceful (after current sleep/cycle)
 touch STOP_CYCLE_RUNNER
 
-# сразу
+# immediate
 kill $(cat cycle_runner.pid)
 
-# если завис
+# if stuck
 kill -9 $(cat cycle_runner.pid)
 rm -f STOP_CYCLE_RUNNER cycle_runner.pid
 ```
 
-Проверить, что нет висящих ордеров:
+Check open orders:
 
 ```bash
 python3 polymarket_executor.py --test
-# или
+# or
 python3 -c "from polymarket_executor import get_client; print(get_client().get_open_orders())"
 ```
 
 ---
 
-## Мониторинг (жив ли бот)
+## Monitoring
 
 ```bash
-# процесс
+# process alive?
 ps -p $(cat cycle_runner.pid) -o pid,etime,command
 
-# хвост лога в реальном времени
+# live log
 tail -f cycle_runner.log
 
-# последний decision
+# last decision snapshot
 cat cycle_runner_state.json
 
-# баланс / open orders
+# balance / open orders
 python3 polymarket_executor.py --test
 ```
 
-В логе нормально видеть:
+Healthy log patterns:
 
 ```text
 === CYCLE Bitcoin Up or Down - ... | BUY_YES|BUY_NO|SKIP | ...
 Gates G1=... G2=... G3=...
-EXECUTE MARKET BUY_...   или   SKIP — hard gates...
+EXECUTE MARKET BUY_...   or   SKIP — hard gates...
 ORDER RESPONSE: ..."status": "matched"...
 DB: recorded cycle id=...
 Sleeping 89xs until next 15m open+buffer
 ```
 
-Ошибки, которые **не роняют** процесс (но цикл может не исполниться):
+Non-fatal errors (process keeps running; cycle may skip fill):
 
-- `FOK orders are fully filled or killed` — нет ликвидности на $5  
-- `gamma-api ... timed out` — не резолвнули token  
-- `Failed to fetch live decision from AIPP` — сеть/AIPP timeout  
+- `FOK orders are fully filled or killed` — not enough book liquidity for $5  
+- `gamma-api ... timed out` — token resolve failed  
+- `Failed to fetch live decision from AIPP` — network/AIPP timeout  
 
 ---
 
-## Статистика и SQLite
+## Statistics & SQLite
 
-### Что хранится
+### What is stored
 
-Каждый цикл → строка в таблице `cycles`:
+Each cycle → one row in `cycles`:
 
-- время, slug, title  
+- timestamp, slug, title  
 - action / side, strike, btc, ttc  
 - p_side, edge, confidence, conflict, trend  
 - g1/g2/g3, usdc_free  
 - **final**: `SKIP`, `EXECUTED`, `EXEC_ERROR`, `UNFILLED_CANCELLED`, …  
-- order_id, making_usd (стоимость), taking_shares  
-- после resolve: **outcome**, **pnl_usd**, **win**
+- order_id, making_usd (cost), taking_shares  
+- after resolve: **outcome**, **pnl_usd**, **win**
 
-### Resolve (закрыть outcomes + PnL)
+### Resolve outcomes + PnL
 
-Запускай **после** того, как 15m-рынки успели зарезолвиться (не чаще, чем раз в ~15–30 мин, или раз в день):
+Run after 15m markets have settled (every ~15–30 min, or once a day):
 
 ```bash
 cd /Users/serg/projects/my_trading/aipp-trading
 python3 resolve_trades.py
 ```
 
-Скрипт:
+The script:
 
-1. Берёт `final=EXECUTED` без `outcome`  
-2. Тянет рынок с Gamma по `slug`  
-3. Если resolved → пишет YES/NO, `pnl_usd`, `win`  
-4. Печатает сводку  
+1. Loads `final=EXECUTED` rows without `outcome`  
+2. Fetches the market from Gamma by `slug`  
+3. If resolved → writes YES/NO, `pnl_usd`, `win`  
+4. Prints a summary  
 
-Только статистика (без resolve):
+Stats only (no resolve):
 
 ```bash
 python3 resolve_trades.py --stats-only
 ```
 
-Только resolve:
+Resolve only:
 
 ```bash
 python3 resolve_trades.py --resolve-only
@@ -313,24 +316,24 @@ JSON:
 python3 resolve_trades.py --stats-only --json
 ```
 
-Окна младше ~16 минут по умолчанию **не** резолвятся (ещё рано).
+Rows younger than ~16 minutes are skipped by default (too early to resolve).
 
-### Примеры SQL
+### Example SQL
 
 ```bash
-# последние 20 циклов
+# last 20 cycles
 sqlite3 trades.db "
 SELECT id, ts_utc, side, printf('%.3f', edge) AS edge, final, outcome, printf('%.2f', pnl_usd) AS pnl
 FROM cycles ORDER BY id DESC LIMIT 20;
 "
 
-# только исполненные
+# fills only
 sqlite3 trades.db "
 SELECT id, ts_utc, side, edge, making_usd, taking_shares, outcome, pnl_usd, win
 FROM cycles WHERE final = 'EXECUTED' ORDER BY id DESC LIMIT 30;
 "
 
-# WR и PnL по стороне
+# WR and PnL by side
 sqlite3 trades.db "
 SELECT side,
        COUNT(*) AS n,
@@ -342,7 +345,7 @@ WHERE outcome IS NOT NULL
 GROUP BY side;
 "
 
-# по «толщине» edge
+# by edge thickness
 sqlite3 trades.db "
 SELECT
   CASE
@@ -358,76 +361,76 @@ WHERE outcome IS NOT NULL
 GROUP BY bucket;
 "
 
-# частота SKIP vs EXECUTE
+# SKIP vs EXECUTE frequency
 sqlite3 trades.db "SELECT final, COUNT(*) FROM cycles GROUP BY final;"
 ```
 
-### Как читать сводку `resolve_trades.py`
+### How to read `resolve_trades.py` summary
 
 ```text
-total cycles   — все записи (включая SKIP)
-executed       — были market fills
-resolved       — outcome уже проставлен
-win rate       — доля win среди resolved
-sum pnl_usd    — сумма PnL по resolved ($1/share − cost при win; −cost при lose)
+total cycles   — all rows (including SKIP)
+executed       — market fills attempted/succeeded
+resolved       — outcome filled in
+win rate       — wins / (wins+losses) among resolved
+sum pnl_usd    — sum of resolved PnL ($1/share − cost on win; −cost on loss)
 by side        — YES vs NO
 by edge bucket — thin / mid / fat
 ```
 
-Пока `resolved` мало — **не** делай выводы и **не** крути gates.
+If `resolved` is still small — **do not** retune gates yet.
 
 ---
 
-## Типичный день оператора
+## Typical operator day
 
-| Когда | Действие |
+| When | Action |
 |---|---|
-| Утро | `ps -p $(cat cycle_runner.pid)` — жив? иначе restart |
-| | `python3 resolve_trades.py` — догнать outcomes |
-| Днём | `tail -f cycle_runner.log` при желании |
-| | Mac **не** должен спать, если нужна непрерывность |
-| Вечер | `python3 resolve_trades.py` + глянуть free USDC |
-| Раз в неделю | SQL by side / edge — есть ли edge? |
+| Morning | `ps -p $(cat cycle_runner.pid)` — alive? else restart |
+| | `python3 resolve_trades.py` — catch up outcomes |
+| Daytime | `tail -f cycle_runner.log` if needed |
+| | Keep host **awake** for continuous coverage |
+| Evening | `python3 resolve_trades.py` + check free USDC |
+| Weekly | SQL by side / edge — is there real edge? |
 
 ---
 
-## Ручные команды (не авто)
+## Manual commands (not auto mode)
 
-Dry-run один раз (без ордера, обновит strike history):
+One dry-run (no order; updates strike history):
 
 ```bash
 python3 polymarket_agent_bot.py --dry-run
 ```
 
-Live один раз **без** SQLite gates runner (сырой AIPP + limit) — **не для прода**:
+One live cycle **without** runner gates/SQLite (raw AIPP + limit) — **not for production**:
 
 ```bash
 python3 polymarket_agent_bot.py
 ```
 
-Для продакшена всегда **`cycle_runner.py`**.
+For production always use **`cycle_runner.py`**.
 
 ---
 
 ## Troubleshooting
 
-| Симптом | Что делать |
+| Symptom | What to do |
 |---|---|
-| Нет новых строк в `trades.db` | Runner на **старом** коде? Restart `cycle_runner.py`. Жив ли PID? |
-| `total cycles: 0` | Ещё не было цикла после включения ledger; жди 15m |
-| Много `EXEC_ERROR` / FOK | Thin book; смотри log; не паника, size $5 |
-| Free USDC «прыгает» | Redeem/win/loss; смотри `pnl_usd` в БД, не только free |
-| Пропуски по ночам | Mac sleep (крышка); caffeinate / VPS |
-| Два PID `cycle_runner` | Убей лишний: `pkill -f cycle_runner.py` и стартани один |
-| Resolve ничего не закрывает | Рынок ещё open; или Gamma не отдал outcome — повтори позже |
+| No new rows in `trades.db` | Old runner binary? Restart `cycle_runner.py`. Is PID alive? |
+| `total cycles: 0` | No cycle yet after ledger enable; wait ≤15m |
+| Many `EXEC_ERROR` / FOK | Thin book; check log; keep $5 size |
+| Free USDC jumps around | Redeem/win/loss; trust `pnl_usd` in DB, not free only |
+| Night gaps | Mac sleep (lid); use caffeinate / VPS |
+| Two `cycle_runner` PIDs | Kill extras: `pkill -f cycle_runner.py`, start one |
+| Resolve closes nothing | Market still open, or Gamma has no outcome yet — retry later |
 
 ---
 
-## Безопасность
+## Security
 
-- `default.env`, `trades.db`, логи — **не коммитить** (см. `.gitignore`)  
-- Private key в env — только локально  
-- Не шарь `cycle_runner.log` с order id публично без нужды  
+- Do **not** commit `default.env`, `trades.db`, or logs (see `.gitignore`)  
+- Keep private keys local only  
+- Avoid sharing `cycle_runner.log` publicly (order ids)
 
 ---
 
