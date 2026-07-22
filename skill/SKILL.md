@@ -1,125 +1,164 @@
 ---
 name: polymarket-pattern-trader
-description: Skill for running the autonomous 15m Bitcoin pattern trading strategy on Polymarket. The agent acts as the decision maker, querying AIPP MCP tools, applying trend/backtest risk filters, and executing trades using the Python bot.
+description: Skill for running the autonomous 15m Bitcoin pattern trading strategy on Polymarket (balanced v2 — higher trade frequency). The agent is the decision maker; the Python bot is pure execution.
 ---
 
-# Polymarket Pattern Trader Skill
+# Polymarket Pattern Trader Skill (balanced v2)
 
-This skill enables the agent to act as the **sole decision maker** for 15-minute Bitcoin prediction contracts on Polymarket. The agent gathers multi-source context, reasons explicitly about every signal, and only then issues execution commands. The Python bot is a pure execution layer — it does NOT make trading decisions.
+This skill enables the agent to act as the **sole decision maker** for 15-minute Bitcoin Up/Down contracts on Polymarket.
+
+**Design goal (v2):** trade **more often** by trusting the AIPP live binary signal, while keeping only the EV-critical hard filters. Pattern quality and local trend are **soft** context (logging / conviction), not hard vetoes.
+
+The Python bot is a pure execution layer — it does **not** make trading decisions.
+
+**Project path (this machine):** `/Users/serg/projects/my_trading/aipp-trading`
+
+---
+
+## Why balanced v2
+
+Legacy v1 used 5 hard gates (including Sharpe ≥ 1.0, WR ≥ 55% on a **75m** pattern proof, plus hard trend alignment and conviction ≥ 4/8). That stack killed frequency and filtered the wrong horizon.
+
+Historical live lesson (GBRAIN, aging): heavy aipp filters underperformed a simpler always-on AIPP path. Consensus-style over-filtering → near-zero trades.
+
+**v2 rule of thumb:** if AIPP says BUY and there is real edge after the ask, take the $5 trade. Soft signals only document quality and size later — they do not block.
 
 ---
 
 ## Phase 1: Data Collection (run all queries first)
 
-Every 15 minutes when triggered by cron `task-536`, collect ALL signals in parallel before making any decision:
+Every 15 minutes, collect ALL signals in parallel before deciding:
 
-### 1. Balance Check
+### 1. Balance / connection
 ```bash
-python3 /home/serg/projects/trading/polymarket_agent_bot.py --dry-run
+python3 /Users/serg/projects/my_trading/aipp-trading/polymarket_executor.py --test
+# or
+python3 /Users/serg/projects/my_trading/aipp-trading/polymarket_agent_bot.py --dry-run
 ```
-Confirm balance ≥ $5.00 USDC. If below, skip and notify.
+Confirm USDC balance ≥ **$5.00**. If below, SKIP and notify.
 
-### 2. Live Binary Signal
-Query `get_live_polymarket_trade_decision` for `BTCUSDT`.
+### 2. Live Binary Signal (PRIMARY)
+Query `get_live_polymarket_trade_decision` for `BTCUSDT` (`interval=15m`).
 
-Extract the following fields:
-- `market.title`, `market.strikePrice`, `market.currentPrice`
-- `market.yes.ask`, `market.no.ask` — actual prices to pay
-- `pattern.ensemble.closeAboveStrikeProb` — P(BTC > strike at expiry)
-- `pattern.ensemble.closeBelowStrikeProb` — P(BTC < strike at expiry)
-- `combined.direction`, `combined.confidence`, `combined.conflict`
+Extract:
+- `market.title`, `market.slug`, `market.strikePrice`, `market.currentPrice`
+- `market.yes.ask`, `market.no.ask`
+- `market.timeToCloseMinutes`, `decisionMode` (`standard` | `near_expiry`)
+- `pattern.ensemble.closeAboveStrikeProb` / `closeBelowStrikeProb`
+- `combined.direction`, `combined.confidence`, `combined.conflict`, `combined.pYes`, `combined.pNo`
 - `intrabar.momentumSignal`, `intrabar.confidence`
-- `decision.action` — AIPP's own recommendation (BUY_YES / BUY_NO / SKIP)
-- `execution.edgeYes`, `execution.edgeNo` — expected edge after spread
+- `decision.action` — BUY_YES / BUY_NO / SKIP
+- `decision.entryPriceMax`, `decision.skipReasons`
+- `execution.edgeYes`, `execution.edgeNo`
 
-### 3. Pattern Quality Backtest
-Query `get_trading_decision` for `BTCUSDT`, `interval=15m`, `q=40`, `f=3`, `includeBacktest=true`.
+### 3. Pattern quality (SOFT context only)
+Query `get_trading_decision` for `BTCUSDT`, `interval=15m`, `q=40`, `f=3`, `includeBacktest=true`, `feePct=0`, `slippagePct=0`.
 
-> **⚠️ CRITICAL: Two-Source Architecture — Do NOT confuse these tools**
+> **⚠️ Two-source architecture — do NOT confuse these tools**
 >
 > | Tool | Purpose | Horizon | Use for |
 > |---|---|---|---|
-> | `get_live_polymarket_trade_decision` | Binary P(close > strike) | **15 min** ✅ | **Primary signal & trade direction** |
-> | `get_trading_decision` proof backtest | Historical pattern quality | **75 min** (5 bars × 15m) | **Pattern credibility filter ONLY** |
+> | `get_live_polymarket_trade_decision` | Binary P(close > strike) | **15 min** ✅ | **Primary signal & direction** |
+> | `get_trading_decision` proof | Pattern LONG/SHORT quality | **~75 min** | **Soft context / conviction ONLY** |
 >
-> `proof.stats.winRate` is NOT the probability of the binary outcome. It measures whether the pattern's LONG/SHORT direction was profitable over 75 minutes. Use it only to answer: *"Does this pattern have any historical statistical credibility?"*
+> `proof.stats.winRate` is **not** the binary outcome probability. Never hard-block a 15m trade solely because the 75m proof is weak.
 >
-> Always set `feePct=0`, `slippagePct=0` — we need the raw directional probability, not net P&L.
+> Prefer `combined.pYes` / `combined.pNo` (or ensemble probs) for G3 edge math when AIPP fuses pattern + intrabar.
 
-Extract:
-- `evidenceQuality.grade` and `evidenceQuality.score`
+Extract for logging:
+- `evidenceQuality.grade`, `evidenceQuality.score`
 - `proof.stats.winRate`, `proof.stats.sharpeRatio`, `proof.verdict`
-- `final.direction` (LONG or SHORT) — must align with Polymarket signal direction
-- `metrics.regime` — market regime context
+- `final.direction`, `metrics.regime`
+
+### 4. Local trend (SOFT)
+Read `strike_history.json` in the project root (bot also maintains it on dry-run / live):
+- `UP` if last 3 strikes are sequentially rising
+- `DOWN` if last 3 strikes are sequentially falling
+- else `NEUTRAL`
 
 ---
 
-## Phase 2: Deliberate Decision (agent must reason explicitly)
+## Phase 2: Deliberate Decision
 
-After collecting all data, the agent must **reason through each gate out loud** and produce a decision summary before executing anything.
+Reason through gates out loud, then print the decision summary.
 
-### Hard Gates — ALL must pass to execute
+### Hard Gates — ALL must pass to EXECUTE
 
-| # | Gate | Condition | Fail action |
+| # | Gate | Condition | Fail |
 |---|---|---|---|
-| G1 | **AIPP live verdict** | `decision.action` = BUY_YES or BUY_NO | SKIP |
-| G2 | **No conflict** | `combined.conflict` = false | SKIP |
-| G3 | **Binary probability edge** | `closeAboveStrikeProb` > ask_yes + 0.02 (for YES), or `closeBelowStrikeProb` > ask_no + 0.02 (for NO) | SKIP |
-| G4 | **Pattern quality** | `evidenceQuality.grade` ≠ THIN/WEAK AND `proof.sharpeRatio` ≥ 1.0 AND `proof.winRate` ≥ 55% | SKIP |
-| G5 | **Trend alignment** | BUY_YES allowed only if local trend ≠ DOWN; BUY_NO allowed only if local trend ≠ UP | SKIP |
+| **G1** | **AIPP live verdict** | `decision.action` ∈ {BUY_YES, BUY_NO} | SKIP |
+| **G2** | **No conflict** | `combined.conflict` = false | SKIP |
+| **G3** | **Binary edge vs ask** | Prefer fused probs: for YES use `combined.pYes` (fallback `closeAboveStrikeProb`) > `ask_yes + 0.02`; for NO use `combined.pNo` (fallback `closeBelowStrikeProb`) > `ask_no + 0.02` | SKIP |
 
-> **G3 explanation:** If YES costs $0.53, we need `closeAboveStrikeProb` > 0.55 to have positive expected value. If NO costs $0.48, we need `closeBelowStrikeProb` > 0.50. Add a 2% buffer to be safe.
+Also require:
+- Balance ≥ $5
+- `ask ≤ decision.entryPriceMax` when AIPP provides `entryPriceMax`
+- Do **not** force-trade when AIPP says SKIP
 
-### Conviction Scorecard (for logging and transparency)
+> **G3 example:** YES ask $0.53 → need pYes > 0.55. NO ask $0.48 → need pNo > 0.50.
 
-After checking gates, compute a conviction score to document your reasoning:
+### Soft signals (do NOT hard-block)
+
+Use these only for the conviction scorecard, logging, and optional future size tiers:
+
+| Signal | Soft effect |
+|---|---|
+| Evidence THIN/WEAK | − conviction; still allow trade if G1–G3 pass |
+| Proof Sharpe / WR / FAILED | − conviction; **never** hard veto |
+| Local trend opposite to side | − conviction; **never** hard veto |
+| Pattern direction vs live side mismatch | note in summary; **never** hard veto |
+| High combined confidence / aligned intrabar | + conviction |
+
+### Conviction Scorecard (logging only — NOT required to execute)
 
 ```
-Signal strength:
-  + combined.confidence > 0.35    → +2 pts  (strong)
-  + combined.confidence > 0.20    → +1 pt   (moderate)
-  + intrabar aligns with pattern  → +1 pt
-  + regime is STABLE_UPTREND/DOWNTREND → +1 pt
-  + local trend aligns            → +1 pt
-  - combined.conflict = true      → -3 pts  (hard blocker)
-  - evidenceQuality = THIN/WEAK   → -2 pts
-  - proof.sharpeRatio < 0.5       → -2 pts
-  - proof.sharpeRatio 0.5–1.0     → -1 pt
+Signal strength (informational):
+  + combined.confidence > 0.35           → +2
+  + combined.confidence > 0.20           → +1
+  + intrabar aligns with trade side      → +1
+  + regime supports side (uptrend/YES or downtrend/NO) → +1
+  + local trend aligns with side         → +1
+  - evidenceQuality THIN/WEAK            → -1
+  - proof.sharpeRatio < 0                → -1
+  - local trend opposes side             → -1
 
-Minimum to execute: 4/8 points AND all hard gates passed.
+Conviction is for the summary only.
+If G1–G3 pass → EXECUTE even at low conviction (default size $5).
 ```
+
+Optional later (only after 30+ live trades with stats):
+- conviction ≤ 1 → keep $5 or skip discretionary
+- conviction ≥ 4 → still $5 until proven (no size-up yet)
 
 ### Required Agent Decision Summary
 
-Before calling any execution command, always output a summary like this:
-
 ```
 === DECISION SUMMARY [Iteration N] ===
+Framework: balanced v2
 Market: [title]
-Strike: [price] | BTC Now: [price] | Trend: [UP/DOWN/NEUTRAL]
+Strike: [price] | BTC Now: [price] | Trend: [UP/DOWN/NEUTRAL] (soft)
+TTC: [min] | Mode: [standard|near_expiry]
 
 Signal Analysis:
   AIPP verdict:         [BUY_YES/BUY_NO/SKIP]
-  closeAboveStrikeProb: [X%]  (YES ask: $X)  → Edge: [+/-X]
-  closeBelowStrikeProb: [X%]  (NO ask: $X)   → Edge: [+/-X]
+  pYes (combined/ens):  [X%]  (YES ask: $X)  → Edge: [+/-X]
+  pNo  (combined/ens):  [X%]  (NO ask: $X)   → Edge: [+/-X]
   Combined confidence:  [X] | Conflict: [yes/no]
   Intrabar momentum:    [BULLISH/BEARISH/NEUTRAL]
 
-Pattern Quality:
+Pattern Quality (soft only):
   Evidence grade:       [THIN/OK/MEDIUM/STRONG]
-  Backtest Sharpe:      [X]   (threshold: ≥ 1.0)
-  Backtest WinRate:     [X%]  (threshold: ≥ 55%)
-  Backtest direction:   [LONG/SHORT] → aligns with signal: [yes/no]
+  Backtest Sharpe:      [X]   (soft — not a hard gate)
+  Backtest WinRate:     [X%]  (soft — not a hard gate)
+  Backtest direction:   [LONG/SHORT] → aligns: [yes/no/n/a]
   Pattern regime:       [regime]
 
-Gate Results:
+Hard Gates:
   G1 AIPP verdict:      [PASS/FAIL]
   G2 No conflict:       [PASS/FAIL]
   G3 Binary edge:       [PASS/FAIL]
-  G4 Pattern quality:   [PASS/FAIL]
-  G5 Trend alignment:   [PASS/FAIL]
 
-Conviction score:       [X/8]
+Conviction (info):      [X] — does not block
 FINAL DECISION:         [EXECUTE / SKIP] — reason: [...]
 ======================================
 ```
@@ -128,34 +167,47 @@ FINAL DECISION:         [EXECUTE / SKIP] — reason: [...]
 
 ## Phase 3: Execution
 
-### If EXECUTE:
+### If EXECUTE (G1–G3 all PASS):
 ```bash
-python3 /home/serg/projects/trading/polymarket_agent_bot.py
+python3 /Users/serg/projects/my_trading/aipp-trading/polymarket_agent_bot.py
 ```
-Then immediately verify no unintended open orders remain by checking:
+Then verify open orders:
 ```python
-from polymarket_executor import get_client; client = get_client(); print(client.get_open_orders())
+from polymarket_executor import get_client
+client = get_client()
+print(client.get_open_orders())
 ```
 
 ### If SKIP:
 ```bash
-python3 /home/serg/projects/trading/polymarket_agent_bot.py --dry-run
+python3 /Users/serg/projects/my_trading/aipp-trading/polymarket_agent_bot.py --dry-run
 ```
-This updates `strike_history.json` with the new strike for trend tracking, without placing any order.
+Updates `strike_history.json` without placing an order.
 
-> **⚠️ IMPORTANT:** If the bot returns a BUY signal but a limIt order was placed and NOT filled (`size_matched: 0`), cancel it immediately:
+> **⚠️ Stale GTC orders:** if a limit order is placed and not filled (`size_matched: 0`), cancel before expiry:
 > ```python
 > client.cancel_orders([order_id])
 > ```
-> A stale unfilled limit order near expiry can get a *toxic fill* when the price reverses.
+> Unfilled orders near expiry can get toxic fills.
 
 ---
 
-## Reference: Local Trend Filter
+## Sizing & risk
 
-The bot reads [strike_history.json](file:///home/serg/projects/trading/strike_history.json):
-- Trend = `UP` if last 3 strikes are sequentially rising
-- Trend = `DOWN` if last 3 strikes are sequentially falling
-- Trend = `NEUTRAL` otherwise
+- Default size: **$5.00 USDC** per trade (~integer shares at ask)
+- One market at a time; check open orders every cycle
+- Never size up until **30+ live trades** with documented positive expectancy
+- Only **15m** BTC Up/Down (not 5m — spreads kill small edges)
 
-Trade sizing: always $5.00 USDC (≈ 10 shares at $0.48–$0.53). Never size up until the strategy proves consistent profitability over 30+ trades.
+---
+
+## Quick reference: when to trade
+
+| Situation | Action |
+|---|---|
+| AIPP BUY_* + no conflict + p > ask+2% | **EXECUTE $5** |
+| AIPP SKIP | **SKIP** (never force) |
+| conflict = true | **SKIP** |
+| Weak 75m proof / THIN evidence | **Still EXECUTE** if G1–G3 pass (log soft flags) |
+| Trend opposes side | **Still EXECUTE** if G1–G3 pass (log soft flags) |
+| Balance < $5 | **SKIP** |

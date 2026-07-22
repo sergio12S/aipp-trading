@@ -149,13 +149,11 @@ class PolymarketAgentBot:
             logger.info(f"SKIP signal or missing side. Reasons: {decision.get('skipReasons') or 'No Edge'}")
             return
 
-        # Trend Filter check
+        # Soft trend note only (balanced v2) — do not hard-block; agent owns vetoes
         if side.upper() == "NO" and trend == "UP":
-            logger.warning(f"Trend is UP but signal is BUY_NO. Skipping trade to prevent losses.")
-            return
+            logger.warning(f"Soft: trend is UP but signal is BUY_NO — proceeding (balanced v2).")
         if side.upper() == "YES" and trend == "DOWN":
-            logger.warning(f"Trend is DOWN but signal is BUY_YES. Skipping trade to prevent losses.")
-            return
+            logger.warning(f"Soft: trend is DOWN but signal is BUY_YES — proceeding (balanced v2).")
 
         # 3. Sizing & pricing
         max_entry = decision.get("entryPriceMax", 1.0)

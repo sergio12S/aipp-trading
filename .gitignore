@@ -9,6 +9,10 @@ manus-*.db
 
 # === Runtime data ===
 strike_history.json
+cycle_runner.log
+cycle_runner.pid
+cycle_runner_state.json
+STOP_CYCLE_RUNNER
 __pycache__/
 *.pyc
 *.pyo

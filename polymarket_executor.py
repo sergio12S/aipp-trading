@@ -47,14 +47,27 @@ def get_client():
 
 def test_connection():
     try:
+        from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
+
         client = get_client()
         print("Testing connection to Polymarket CLOB...")
         print(f"Signer Address: {client.get_address()}")
-        print(f"Collateral Address: {client.get_collateral_address()}")
-        
-        # Test fetching keys or orderbook
+        funder = os.getenv("POLYMARKET_FUNDER")
+        if funder:
+            print(f"Funder (proxy wallet): {funder}")
+
         resp = client.get_ok()
         print(f"Status OK response: {resp}")
+
+        # py-clob-client-v2: balance lives on get_balance_allowance, not get_collateral_address
+        params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=2)
+        bal = client.get_balance_allowance(params)
+        usdc = float(bal.get("balance", "0")) / 1_000_000.0
+        print(f"USDC Balance: ${usdc:.2f}")
+
+        open_orders = client.get_open_orders()
+        count = len(open_orders) if isinstance(open_orders, list) else "n/a"
+        print(f"Open orders: {count}")
         return True
     except Exception as e:
         print(f"Connection test failed: {e}", file=sys.stderr)
