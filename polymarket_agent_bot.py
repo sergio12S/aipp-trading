@@ -149,11 +149,10 @@ class PolymarketAgentBot:
             logger.info(f"SKIP signal or missing side. Reasons: {decision.get('skipReasons') or 'No Edge'}")
             return
 
-        # Soft trend note only (balanced v2) — do not hard-block; agent owns vetoes
-        if side.upper() == "NO" and trend == "UP":
-            logger.warning(f"Soft: trend is UP but signal is BUY_NO — proceeding (balanced v2).")
-        if side.upper() == "YES" and trend == "DOWN":
-            logger.warning(f"Soft: trend is DOWN but signal is BUY_YES — proceeding (balanced v2).")
+        # Hard G5 Trend Filter: BUY_YES allowed only in UP trend; BUY_NO allowed only in DOWN trend
+        if (side.upper() == "YES" and trend != "UP") or (side.upper() == "NO" and trend != "DOWN"):
+            logger.warning(f"G5 Trend filter block: signal is BUY_{side} but market trend is '{trend}'. Skipping trade.")
+            return
 
         # 3. Sizing & pricing
         max_entry = decision.get("entryPriceMax", 1.0)
@@ -166,11 +165,11 @@ class PolymarketAgentBot:
             logger.warning(f"Market price ({ask_price}) is higher than max entry limit ({max_entry}). Skipping trade.")
             return
 
-        # Allocate capital (hardcoded to $5.0 USDC for minimal safe bets)
-        allocated_usd = 5.0
+        # Allocate capital ($2.0 USDC for minimal safe bets)
+        allocated_usd = 2.0
 
         if allocated_usd > usdc_balance:
-            logger.warning(f"Not enough USDC balance (${usdc_balance:.2f}) to place the $5.00 minimum order.")
+            logger.warning(f"Not enough USDC balance (${usdc_balance:.2f}) to place the $2.00 order.")
             return
 
         # Round ask price to 2 decimals (tick size $0.01)

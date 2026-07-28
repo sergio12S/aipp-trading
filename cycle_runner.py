@@ -39,8 +39,8 @@ logging.basicConfig(
 logger = logging.getLogger("CycleRunner")
 
 EDGE_BUFFER = 0.02
-MIN_BALANCE = 5.0
-ALLOCATED_USD = 5.0
+MIN_BALANCE = 2.0
+ALLOCATED_USD = 2.0
 OPEN_BUFFER_SEC = 25  # wait after :00/:15/:30/:45 for market listing
 STOP_FILE = os.path.join(os.path.dirname(__file__), "STOP_CYCLE_RUNNER")
 STATE_FILE = os.path.join(os.path.dirname(__file__), "cycle_runner_state.json")
@@ -76,7 +76,7 @@ def unpack_card(raw):
     return raw.get("data", raw) if isinstance(raw, dict) else {}
 
 
-def evaluate_v2(card: dict) -> dict:
+def evaluate_v2(card: dict, trend: str = "NEUTRAL") -> dict:
     market = card.get("market") or {}
     decision = card.get("decision") or {}
     combined = card.get("combined") or {}
@@ -120,17 +120,52 @@ def evaluate_v2(card: dict) -> dict:
         ask = None
         p_side = None
 
+    # G5 Hard Trend Filter: BUY_YES only in UP trend, BUY_NO only in DOWN trend
+    g5 = (side == "YES" and trend == "UP") or (side == "NO" and trend == "DOWN")
+
+    # G4 Evidence Quality & G6 Market Structure Regime Filter
+    evidence_quality = card.get("evidenceQuality") or {}
+    grade = (evidence_quality.get("grade") or "OK").upper()
+    score = float(evidence_quality.get("score") or 1.0)
+    g4 = (grade not in ("THIN", "WEAK")) and (score >= 0.50)
+
+    market_structure = card.get("marketStructure") or {}
+    ms_trend = (market_structure.get("trend") or "").upper()
+    g6 = (ms_trend != "CHOP")
+
     entry_max = decision.get("entryPriceMax")
     price_ok = True
     if entry_max is not None and ask is not None:
         price_ok = ask <= float(entry_max) + 1e-9
 
-    execute = bool(g1 and g2 and g3 and price_ok)
+    execute = bool(g1 and g2 and g3 and price_ok and g5 and g4 and g6)
+
+    skip_reasons = decision.get("skipReasons") or decision.get("summary")
+    extra_reasons = []
+    if not g5:
+        extra_reasons.append(f"G5 trend filter failed: side={side} requires trend={'UP' if side=='YES' else 'DOWN'}, but current trend is '{trend}'.")
+    if not g4:
+        extra_reasons.append(f"G4 quality filter failed: evidence grade={grade}, score={score:.2f}.")
+    if not g6:
+        extra_reasons.append(f"G6 regime filter failed: market structure trend is '{ms_trend}'.")
+
+    if extra_reasons:
+        msg_str = "; ".join(extra_reasons)
+        if isinstance(skip_reasons, list):
+            skip_reasons.extend(extra_reasons)
+        elif skip_reasons:
+            skip_reasons = f"{skip_reasons}; {msg_str}"
+        else:
+            skip_reasons = msg_str
+
     return {
         "execute": execute,
         "g1": g1,
         "g2": g2,
         "g3": g3,
+        "g4": g4,
+        "g5": g5,
+        "g6": g6,
         "price_ok": price_ok,
         "action": action,
         "side": side,
@@ -147,7 +182,7 @@ def evaluate_v2(card: dict) -> dict:
         "ttc": market.get("timeToCloseMinutes"),
         "execution_edge_yes": execution.get("edgeYes"),
         "execution_edge_no": execution.get("edgeNo"),
-        "skip_reasons": decision.get("skipReasons") or decision.get("summary"),
+        "skip_reasons": skip_reasons,
     }
 
 
@@ -259,7 +294,7 @@ def run_one_cycle(bot: PolymarketAgentBot) -> dict:
     else:
         trend = "NEUTRAL"
 
-    ev = evaluate_v2(card)
+    ev = evaluate_v2(card, trend=trend)
     ev["trend"] = trend
     ev["usdc"] = usdc
     result.update(ev)
@@ -274,10 +309,13 @@ def run_one_cycle(bot: PolymarketAgentBot) -> dict:
         usdc,
     )
     logger.info(
-        "Gates G1=%s G2=%s G3=%s price_ok=%s | side=%s p=%.4f ask=%s edge=%.4f conf=%s",
+        "Gates G1=%s G2=%s G3=%s G4(quality)=%s G5(trend)=%s G6(regime)=%s price_ok=%s | side=%s p=%.4f ask=%s edge=%.4f conf=%s",
         ev["g1"],
         ev["g2"],
         ev["g3"],
+        ev["g4"],
+        ev["g5"],
+        ev["g6"],
         ev["price_ok"],
         ev.get("side"),
         ev.get("p_side") or 0.0,
