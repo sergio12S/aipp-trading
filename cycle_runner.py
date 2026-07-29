@@ -102,26 +102,22 @@ def evaluate_v2(card: dict, trend: str = "NEUTRAL") -> dict:
     p_no = float(p_no) if p_no is not None else 0.0
     conflict = bool(combined.get("conflict"))
 
-    g1 = action in ("BUY_YES", "BUY_NO") and side in ("YES", "NO")
+    # G1 Gate: Long-Only strategy — ONLY allow BUY_YES (side YES). BUY_NO is disabled.
+    g1 = (action == "BUY_YES") and (side == "YES")
     g2 = not conflict
     if side == "YES":
         edge = p_yes - yes_ask
         g3 = p_yes > yes_ask + EDGE_BUFFER
         ask = yes_ask
         p_side = p_yes
-    elif side == "NO":
-        edge = p_no - no_ask
-        g3 = p_no > no_ask + EDGE_BUFFER
-        ask = no_ask
-        p_side = p_no
     else:
         edge = 0.0
         g3 = False
         ask = None
         p_side = None
 
-    # G5 Hard Trend Filter: BUY_YES only in UP trend, BUY_NO only in DOWN trend
-    g5 = (side == "YES" and trend == "UP") or (side == "NO" and trend == "DOWN")
+    # G5 Hard Trend Filter: BUY_YES only in UP trend.
+    g5 = (side == "YES" and trend == "UP")
 
     # G4 Evidence Quality & G6 Market Structure Regime Filter
     evidence_quality = card.get("evidenceQuality") or {}

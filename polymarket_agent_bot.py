@@ -149,9 +149,9 @@ class PolymarketAgentBot:
             logger.info(f"SKIP signal or missing side. Reasons: {decision.get('skipReasons') or 'No Edge'}")
             return
 
-        # Hard G5 Trend Filter: BUY_YES allowed only in UP trend; BUY_NO allowed only in DOWN trend
-        if (side.upper() == "YES" and trend != "UP") or (side.upper() == "NO" and trend != "DOWN"):
-            logger.warning(f"G5 Trend filter block: signal is BUY_{side} but market trend is '{trend}'. Skipping trade.")
+        # Long-Only G5 Trend Filter: ONLY BUY_YES allowed, and ONLY in UP trend. BUY_NO is completely disabled.
+        if side.upper() != "YES" or trend != "UP":
+            logger.warning(f"Long-Only Trend filter block: side is '{side}' and trend is '{trend}' (requires BUY_YES and UP trend). Skipping trade.")
             return
 
         # 3. Sizing & pricing
