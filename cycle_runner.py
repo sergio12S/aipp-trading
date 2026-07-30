@@ -116,8 +116,9 @@ def evaluate_v2(card: dict, trend: str = "NEUTRAL") -> dict:
         ask = None
         p_side = None
 
-    # G5 Hard Trend Filter: BUY_YES only in UP trend.
-    g5 = (side == "YES" and trend == "UP")
+    # G5 Trend Filter: BUY_YES allowed in UP trend, OR in NEUTRAL trend if AIPP has high confidence (p_yes >= 0.62 and edge >= 0.03)
+    aipp_high_conf = (side == "YES" and p_yes >= 0.62 and edge >= 0.03 and not conflict)
+    g5 = (side == "YES") and (trend == "UP" or (trend == "NEUTRAL" and aipp_high_conf))
 
     # G4 Evidence Quality & G6 Market Structure Regime Filter
     evidence_quality = card.get("evidenceQuality") or {}

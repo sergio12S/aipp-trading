@@ -149,9 +149,13 @@ class PolymarketAgentBot:
             logger.info(f"SKIP signal or missing side. Reasons: {decision.get('skipReasons') or 'No Edge'}")
             return
 
-        # Long-Only G5 Trend Filter: ONLY BUY_YES allowed, and ONLY in UP trend. BUY_NO is completely disabled.
-        if side.upper() != "YES" or trend != "UP":
-            logger.warning(f"Long-Only Trend filter block: side is '{side}' and trend is '{trend}' (requires BUY_YES and UP trend). Skipping trade.")
+        # Long-Only G5 Trend Filter: BUY_YES allowed in UP trend, OR in NEUTRAL trend if AIPP confidence is high
+        combined = card_data.get("combined", {})
+        ensemble = (card_data.get("pattern") or {}).get("ensemble") or {}
+        p_yes = float(combined.get("pYes") or ensemble.get("closeAboveStrikeProb") or 0.0)
+        aipp_high_conf = (side.upper() == "YES" and p_yes >= 0.62 and not combined.get("conflict"))
+        if side.upper() != "YES" or (trend != "UP" and not (trend == "NEUTRAL" and aipp_high_conf)):
+            logger.warning(f"Long-Only Trend filter block: side='{side}' trend='{trend}' pYes={p_yes}. Skipping trade.")
             return
 
         # 3. Sizing & pricing
