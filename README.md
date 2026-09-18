@@ -438,3 +438,10 @@ For production always use **`cycle_runner.py`**.
 ## License
 
 MIT
+
+## Ledger notes (measurement)
+
+- Every cycle is written to `trades.db` — **SKIP and EXECUTED** (via `persist_cycle`).
+- After each cycle (and on startup) the runner calls `resolve_pending` automatically (~16m after window) so PnL stats update without a manual step.
+- You can still run `python3 resolve_trades.py` anytime; it is idempotent.
+

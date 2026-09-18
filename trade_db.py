@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS cycles (
     g1 INTEGER,
     g2 INTEGER,
     g3 INTEGER,
+    g4 INTEGER,
+    g5 INTEGER,
+    g6 INTEGER,
+    g7 INTEGER,
+    g7_configured INTEGER,
+    gate_shadow INTEGER,
+    ask_max REAL,
+    ask_min REAL,
     price_ok INTEGER,
     usdc_free REAL,
     final TEXT NOT NULL,
@@ -88,6 +96,25 @@ def connect(db_path: str = DB_PATH):
 def init_db(db_path: str = DB_PATH) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        _migrate_gate_columns(conn)
+
+
+def _migrate_gate_columns(conn: sqlite3.Connection) -> None:
+    """Add G5–G7 / ask-band columns to older DBs without rebuilding."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(cycles)")}
+    alters = [
+        ("g4", "ALTER TABLE cycles ADD COLUMN g4 INTEGER"),
+        ("g5", "ALTER TABLE cycles ADD COLUMN g5 INTEGER"),
+        ("g6", "ALTER TABLE cycles ADD COLUMN g6 INTEGER"),
+        ("g7", "ALTER TABLE cycles ADD COLUMN g7 INTEGER"),
+        ("g7_configured", "ALTER TABLE cycles ADD COLUMN g7_configured INTEGER"),
+        ("gate_shadow", "ALTER TABLE cycles ADD COLUMN gate_shadow INTEGER"),
+        ("ask_max", "ALTER TABLE cycles ADD COLUMN ask_max REAL"),
+        ("ask_min", "ALTER TABLE cycles ADD COLUMN ask_min REAL"),
+    ]
+    for name, sql in alters:
+        if name not in cols:
+            conn.execute(sql)
 
 
 def _bool_int(v: Any) -> Optional[int]:
@@ -130,6 +157,10 @@ def record_cycle(result: dict, card: Optional[dict] = None, db_path: str = DB_PA
 
     p_yes = _f(combined.get("pYes"))
     p_no = _f(combined.get("pNo"))
+    if p_yes is None:
+        p_yes = _f(result.get("p_yes"))
+    if p_no is None:
+        p_no = _f(result.get("p_no"))
     if p_yes is None and result.get("side") == "YES":
         p_yes = _f(result.get("p_side"))
     if p_no is None and result.get("side") == "NO":
@@ -156,6 +187,14 @@ def record_cycle(result: dict, card: Optional[dict] = None, db_path: str = DB_PA
         "g1": _bool_int(result.get("g1")),
         "g2": _bool_int(result.get("g2")),
         "g3": _bool_int(result.get("g3")),
+        "g4": _bool_int(result.get("g4")) if result.get("g4") is not None else None,
+        "g5": _bool_int(result.get("g5")) if result.get("g5") is not None else None,
+        "g6": _bool_int(result.get("g6")) if result.get("g6") is not None else None,
+        "g7": _bool_int(result.get("g7")) if result.get("g7") is not None else None,
+        "g7_configured": _bool_int(result.get("g7_configured")),
+        "gate_shadow": _bool_int(result.get("gate_shadow")),
+        "ask_max": _f(result.get("ask_max")),
+        "ask_min": _f(result.get("ask_min")),
         "price_ok": _bool_int(result.get("price_ok")),
         "usdc_free": _f(result.get("usdc")),
         "final": result.get("final") or "UNKNOWN",
@@ -211,16 +250,41 @@ def _card_summary(card: Optional[dict]) -> Optional[dict]:
 
 
 def fetch_gamma_market(slug: str) -> Optional[dict]:
-    url = f"https://gamma-api.polymarket.com/markets?slug={slug}"
+    """Fetch market by slug. BTC 15m often vanishes from /markets?slug= after close;
+    fall back to /events?slug= and take the nested market."""
     try:
-        r = requests.get(url, timeout=20)
+        r = requests.get(
+            "https://gamma-api.polymarket.com/markets",
+            params={"slug": slug},
+            timeout=20,
+        )
         r.raise_for_status()
-        markets = r.json()
-        if not markets:
+        markets = r.json() or []
+        if markets:
+            return markets[0]
+    except Exception:
+        pass
+
+    try:
+        r = requests.get(
+            "https://gamma-api.polymarket.com/events",
+            params={"slug": slug},
+            timeout=20,
+        )
+        r.raise_for_status()
+        events = r.json() or []
+        if not events:
             return None
-        return markets[0]
+        ev = events[0]
+        nested = ev.get("markets") or []
+        for m in nested:
+            if (m.get("slug") or "") == slug:
+                return m
+        if nested:
+            return nested[0]
     except Exception:
         return None
+    return None
 
 
 def infer_outcome_from_market(market: dict, strike: Optional[float] = None) -> tuple[Optional[str], Optional[float]]:
@@ -337,7 +401,19 @@ def resolve_pending(db_path: str = DB_PATH, limit: int = 200, force_min_age_minu
 
             market = fetch_gamma_market(row["slug"])
             if not market:
-                errors.append(f"id={row['id']} gamma miss slug={row['slug']}")
+                # Stale markets disappear from Gamma; don't spam forever.
+                if age_min > 60 * 24 * 7:
+                    conn.execute(
+                        """
+                        UPDATE cycles
+                        SET outcome = 'UNKNOWN', resolved_at = ?, pnl_usd = NULL, win = NULL
+                        WHERE id = ?
+                        """,
+                        (utc_now_iso(), row["id"]),
+                    )
+                    skipped_n += 1
+                else:
+                    errors.append(f"id={row['id']} gamma miss slug={row['slug']}")
                 continue
 
             outcome, close_px = infer_outcome_from_market(market, row["strike"])

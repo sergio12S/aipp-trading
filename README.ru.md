@@ -2,6 +2,10 @@
 
 Автоторговля 15‑минутными Bitcoin **Up/Down** на [Polymarket](https://polymarket.com) по сигналам [AIPP](https://aipricepatterns.com).
 
+> Как исследовать трейдеров / фейки: [`doc/how-to-research-polymarket-traders.ru.md`](doc/how-to-research-polymarket-traders.ru.md).  
+> Ресерч кошельков: [`doc/research-btc15m-earners.ru.md`](doc/research-btc15m-earners.ru.md).  
+> Адаптация (G4): [`doc/adapt-from-earners.ru.md`](doc/adapt-from-earners.ru.md).
+
 > **Язык:** это **русская копия** ops-гайда. Основное (English): [`README.md`](README.md).  
 > **Почему AIPP / смысл стека:** [`doc/why-this-works.ru.md`](doc/why-this-works.ru.md) · EN: [`doc/why-this-works.md`](doc/why-this-works.md) · индекс: [`doc/README.md`](doc/README.md).
 
@@ -78,6 +82,7 @@ touch STOP_CYCLE_RUNNER
 | **G1** | AIPP = `BUY_YES` или `BUY_NO` (при `SKIP` не торгуем) |
 | **G2** | `combined.conflict = false` |
 | **G3** | вероятность стороны > ask + **0.02** |
+| **G4** | опционально ask в [`ASK_MIN`,`ASK_MAX`] (по умолчанию **shadow**) |
 
 - Размер: **$5 USDC** market order (FOK-style)  
 - Trend / backtest proof — только soft (не hard-block)  
@@ -438,3 +443,10 @@ python3 polymarket_agent_bot.py
 ## License
 
 MIT
+
+## Ledger (измерение)
+
+- Каждый цикл пишется в `trades.db` — и **SKIP**, и **EXECUTED** (`persist_cycle`).
+- После каждого цикла (и на старте) runner сам вызывает `resolve_pending` (~16 мин после окна) — PnL обновляется без ручного шага.
+- `python3 resolve_trades.py` по-прежнему можно гонять вручную; он идемпотентен.
+
